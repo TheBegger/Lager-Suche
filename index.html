@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lager-Suche</title>
+<style>
+body{font-family:system-ui;max-width:700px;margin:40px auto;padding:20px}
+input{width:100%;font-size:18px;padding:14px;border-radius:10px;border:1px solid #ccc}
+.item{padding:12px 0;border-bottom:1px solid #eee}
+.loc{font-weight:700}
+</style>
+</head>
+<body>
+
+<h2>Was suchst du?</h2>
+<input id="q" placeholder="Artikelnummer, Name oder Alias">
+
+<div id="results"></div>
+
+<script>
+const CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQkmfxeyM39IFCaumNzHV-WmWqSkZ7efxPrV_tRbKRe_ggInNgtoJEx5xozv-PzyEbfdHQ3EQ9kusdf/pub?output=csv";
+
+let rows = [];
+
+function parseCSV(text){
+  const lines = text.trim().split(/\r?\n/);
+  const headers = lines[0].split(",");
+  return lines.slice(1).map(line=>{
+    const cols = line.split(",");
+    let obj={};
+    headers.forEach((h,i)=>obj[h.trim()]=(cols[i]||"").trim());
+    return obj;
+  });
+}
+
+function render(list){
+  const el=document.getElementById("results");
+  el.innerHTML="";
+  list.forEach(r=>{
+    el.innerHTML+=`
+      <div class="item">
+        <div><b>${r.name}</b> (${r.sku})</div>
+        <div class="loc">${r.location}</div>
+      </div>`;
+  });
+}
+
+function search(q){
+  q=q.toLowerCase();
+  const hits=rows.filter(r=>{
+    return (
+      (r.name||"").toLowerCase().includes(q) ||
+      (r.sku||"").toLowerCase().includes(q) ||
+      (r.aliases||"").toLowerCase().includes(q) ||
+      (r.ean||"").toLowerCase().includes(q)
+    );
+  });
+  render(hits);
+}
+
+fetch(CSV_URL)
+  .then(r=>r.text())
+  .then(t=>{
+    rows=parseCSV(t);
+    document.getElementById("q").addEventListener("input",e=>search(e.target.value));
+  });
+</script>
+
+</body>
+</html>
