@@ -3,21 +3,35 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Die Große Lagersuchmaschine V2</title>
+<title>Die Große Lagersuchmaschine</title>
 <style>
-  body{font-family:system-ui;max-width:800px;margin:40px auto;padding:20px}
-  h1{font-size:32px;margin:0 0 18px}
-  input{width:100%;font-size:20px;padding:16px;border-radius:12px;border:1px solid #ccc;margin-bottom:14px}
-  .muted{color:#666;margin:10px 0}
+  body{font-family:system-ui;max-width:900px;margin:32px auto;padding:20px}
+  h1{font-size:32px;margin:0 0 14px}
+  input{width:100%;font-size:20px;padding:16px;border-radius:12px;border:1px solid #ccc;margin:12px 0 14px}
+  .muted{color:#666;margin:8px 0}
   .item{padding:14px 0;border-bottom:1px solid #eee}
-  .loc{font-weight:700;margin-top:4px}
-  .meta{color:#555;font-size:14px;margin-top:2px}
+  .loc{font-weight:800;margin-top:6px}
+  .meta{color:#555;font-size:14px;margin-top:4px}
+  .banner{
+    background:#d00000;
+    color:#fff;
+    font-weight:900;
+    padding:12px 14px;
+    border-radius:12px;
+    margin:0 0 16px;
+    text-align:center;
+    letter-spacing:.2px;
+    animation: blink 1s steps(2, jump-none) infinite;
+  }
+  @keyframes blink{ 0%{opacity:1} 50%{opacity:.15} 100%{opacity:1} }
 </style>
 </head>
 <body>
 
-<h1>Die Große Lagersuchmaschine V2</h1>
-<input id="q" placeholder="Was suchst du denn? (Name, Alias, SKU, EAN)" autocomplete="off">
+<div class="banner">Noch in bearbeitung - Media &amp; Kreativteam</div>
+
+<h1>Die Große Lagersuchmaschine</h1>
+<input id="q" placeholder="Was suchst du? (Name, Alias, SKU, EAN)" autocomplete="off">
 <div id="status" class="muted">Lade Daten…</div>
 <div id="results"></div>
 
@@ -38,7 +52,7 @@ function tokens(q){
   return normalize(q).replace(/[^a-z0-9]+/g," ").split(/\s+/).filter(Boolean);
 }
 
-// Robust CSV parser (unterstützt Kommas in "..." und doppelte Quotes "")
+// Robust CSV parser (Kommas in "..." ok)
 function parseCSV(text){
   const out = [];
   let i=0, field="", row=[], inQuotes=false;
@@ -48,10 +62,10 @@ function parseCSV(text){
 
     if(inQuotes){
       if(c === '"' && text[i+1] === '"'){ field += '"'; i += 2; continue; }
-      if(c === '"'){ inQuotes = false; i++; continue; }
+      if(c === '"'){ inQuotes=false; i++; continue; }
       field += c; i++; continue;
     } else {
-      if(c === '"'){ inQuotes = true; i++; continue; }
+      if(c === '"'){ inQuotes=true; i++; continue; }
       if(c === ','){ row.push(field); field=""; i++; continue; }
       if(c === '\n' || c === '\r'){
         if(c === '\r' && text[i+1] === '\n') i++;
@@ -73,30 +87,66 @@ function parseCSV(text){
   });
 }
 
-function formatLocation(loc){
-  if(!loc) return "";
-
-  let s = loc.toString().trim().replace(/\s+/g,"").replace(/\.$/,"");
-  // akzeptiert S1.2.2.3 oder S1.2.2
-  if(!/^S\d+(\.\d+){1,3}$/i.test(s)) return loc;
-
-  const p = s.replace(/^S/i,"").split(".");
-  const [schrank, regal, fach, unterfach] = p;
-
-  let txt = `Liegt in Schrank ${schrank}`;
-  if(regal) txt += `, Regal ${regal} (von oben)`;
-  if(fach) txt += `, Fach ${fach}`;
-  if(unterfach) txt += `, Unterfach/Schublade ${unterfach}`;
-  return txt;
-}
-
 function getName(r){
   return r.name || r.Bezeichnung || "";
 }
-
-function getLoc(r){
-  // robust: falls du mal wieder anders benennst
+function getLocRaw(r){
   return r.location || r.Ablageplatz || r.ablageplatz || "";
+}
+
+function formatLocation(locRaw){
+  if(!locRaw) return "";
+
+  let loc = locRaw.toString().trim();
+
+  // Text-Orte sollen auch "funktionieren"
+  // z.B. "Küche", "Wand", "offen"
+  const simple = loc.replace(/\s+/g," ").trim();
+  const simpleNorm = normalize(simple);
+  if(["kueche","kuche","wand","offen"].includes(simpleNorm)){
+    const pretty = simpleNorm === "kuche" ? "Küche" : (simpleNorm === "kueche" ? "Küche" : simple[0].toUpperCase()+simple.slice(1));
+    return `Liegt in ${pretty}`;
+  }
+
+  // Spezial: "S1 Türe r/l"
+  // akzeptiert: "S1 Türe r", "S1 Tuere r", "S1 Türe l"
+  let mDoor = simple.match(/^([SRL])\s*\.?\s*(\d+)\s+(t(ü|ue)re)\s+([rl])$/i);
+  if(mDoor){
+    const prefix = mDoor[1].toUpperCase();
+    const schrank = mDoor[2];
+    const side = mDoor[5].toLowerCase() === "r" ? "rechts" : "links";
+    return `Liegt an Schrank ${schrank}, Türe ${side}`;
+  }
+
+  // Codes wie:
+  // S3.4.6.5  / S.3.4.6.5 / R.1.2.10 / R1.1.3 / L.1.1.1
+  // Regeln:
+  // - führender Buchstabe S/R/L
+  // - optionaler Punkt nach Buchstabe
+  // - danach 1-4 Zahlen, getrennt durch Punkte
+  let code = loc.replace(/\s+/g,"").replace(/\.$/,"");
+  const m = code.match(/^([SRL])\.?(\d+(?:\.\d+){0,3})$/i);
+  if(!m){
+    // fallback: original anzeigen
+    return `Liegt bei: ${locRaw}`;
+  }
+
+  const prefix = m[1].toUpperCase();
+  const parts = m[2].split("."); // 1..4 Zahlen
+
+  // Du willst: "Schrank X, Regal Y, Fach Z, Unterfach W"
+  const labels = ["Schrank", "Regal", "Fach", "Unterfach"];
+  let txt = "Liegt in ";
+  for(let i=0;i<parts.length && i<labels.length;i++){
+    txt += `${labels[i]} ${parts[i]}`;
+    if(i < parts.length-1) txt += ", ";
+  }
+
+  // Prefix ist nur Bereichskennzeichen (S/R/L) – nicht unbedingt anzeigen.
+  // Wenn du es sehen willst, hier aktivieren:
+  // txt += ` (Bereich ${prefix})`;
+
+  return txt;
 }
 
 function render(list, q){
@@ -116,16 +166,16 @@ function render(list, q){
     const name = getName(r);
     const sku = r.sku || "";
     const ean = r.ean || "";
-    const loc = getLoc(r);
     const mb  = r.mindestbestand || "";
+    const loc = getLocRaw(r);
 
     el.innerHTML += `
       <div class="item">
-        <div><b>${name}</b> ${sku ? `(${sku})` : ""}</div>
+        <div><b>${name || "(ohne Name)"}</b> ${sku ? `(${sku})` : ""}</div>
         <div class="loc">${formatLocation(loc)}</div>
         <div class="meta">
           ${ean ? `EAN: ${ean}` : ``}
-          ${ean && mb ? ` · ` : ``}
+          ${(ean && mb) ? ` · ` : ``}
           ${mb ? `Mindestbestand: ${mb}` : ``}
         </div>
       </div>
@@ -141,7 +191,7 @@ function matchesRow(r, toks){
     r.ean
   ].filter(Boolean).join(" "));
 
-  // AND-Suche: alle Wörter müssen vorkommen
+  // AND-Suche: alle Wörter müssen vorkommen (Teilwort ok)
   return toks.every(t => hay.includes(t));
 }
 
@@ -151,7 +201,7 @@ function search(q){
 
   if(qn.includes("robin")){
     el.innerHTML = `
-      <div style="color:red;font-weight:700;font-size:20px;padding:20px 0;">
+      <div style="color:red;font-weight:900;font-size:20px;padding:16px 0;">
         Robin hat damit nichts zu tun, such selbst!
       </div>`;
     return;
