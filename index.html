@@ -5,17 +5,19 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Lager-Suche</title>
 <style>
-body{font-family:system-ui;max-width:700px;margin:40px auto;padding:20px}
-input{width:100%;font-size:18px;padding:14px;border-radius:10px;border:1px solid #ccc}
-.item{padding:12px 0;border-bottom:1px solid #eee}
-.loc{font-weight:700}
+  body{font-family:system-ui;max-width:800px;margin:40px auto;padding:20px}
+  input{width:100%;font-size:18px;padding:14px;border-radius:10px;border:1px solid #ccc}
+  .muted{color:#666;margin:10px 0}
+  .item{padding:12px 0;border-bottom:1px solid #eee}
+  .loc{font-weight:700}
+  .badges{margin-top:6px;font-size:14px;color:#444}
 </style>
 </head>
 <body>
 
 <h2>Was suchst du?</h2>
-<input id="q" placeholder="Artikelnummer, Name oder Alias">
-
+<input id="q" placeholder="Artikelnummer, Name, Alias oder EAN" autocomplete="off">
+<div id="status" class="muted">Lade Daten…</div>
 <div id="results"></div>
 
 <script>
@@ -23,48 +25,149 @@ const CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQkmfxeyM39IFCa
 
 let rows = [];
 
+// ---------- helpers ----------
+function debounce(fn, ms){
+  let t; return (...args)=>{ clearTimeout(t); t=setTimeout(()=>fn(...args), ms); };
+}
+
+function normalize(s){
+  return (s||"")
+    .toString()
+    .toLowerCase()
+    .trim()
+    .replace(/[ä]/g,"ae").replace(/[ö]/g,"oe").replace(/[ü]/g,"ue").replace(/[ß]/g,"ss")
+    .replace(/[^a-z0-9]+/g," "); // alles zu "Worttrennern"
+}
+
+function splitTokens(q){
+  return normalize(q).split(/\s+/).filter(Boolean);
+}
+
+// Robuster CSV-Parser (kann auch Felder mit Kommas in "..." )
 function parseCSV(text){
-  const lines = text.trim().split(/\r?\n/);
-  const headers = lines[0].split(",");
-  return lines.slice(1).map(line=>{
-    const cols = line.split(",");
-    let obj={};
-    headers.forEach((h,i)=>obj[h.trim()]=(cols[i]||"").trim());
+  const rows = [];
+  let i=0, field="", row=[], inQuotes=false;
+
+  while(i < text.length){
+    const c = text[i];
+
+    if(inQuotes){
+      if(c === '"' && text[i+1] === '"'){ field += '"'; i += 2; continue; }
+      if(c === '"'){ inQuotes = false; i++; continue; }
+      field += c; i++; continue;
+    } else {
+      if(c === '"'){ inQuotes = true; i++; continue; }
+      if(c === ','){ row.push(field); field=""; i++; continue; }
+      if(c === '\n' || c === '\r'){
+        // Zeilenende (handle CRLF)
+        if(c === '\r' && text[i+1] === '\n') i++;
+        row.push(field); field="";
+        // ignoriere komplett leere letzte Zeile
+        if(row.some(v => (v||"").trim() !== "")) rows.push(row);
+        row=[]; i++; continue;
+      }
+      field += c; i++; continue;
+    }
+  }
+  // letzte Zeile
+  row.push(field);
+  if(row.some(v => (v||"").trim() !== "")) rows.push(row);
+
+  const headers = (rows.shift()||[]).map(h => (h||"").trim());
+  return rows.map(cols => {
+    const obj = {};
+    headers.forEach((h, idx) => obj[h] = (cols[idx]||"").trim());
     return obj;
   });
 }
 
-function render(list){
-  const el=document.getElementById("results");
-  el.innerHTML="";
-  list.forEach(r=>{
-    el.innerHTML+=`
+function formatLocation(loc){
+  if(!loc) return "";
+  let s = loc.trim();
+
+  // akzeptiert: S1.2.2.3 oder S1.2.2.3. (mit Punkt am Ende)
+  s = s.replace(/\s+/g,"").replace(/\.$/,"");
+  if(!/^S\d+(\.\d+){1,3}$/i.test(s)) return loc; // fallback: original anzeigen
+
+  const parts = s.replace(/^S/i,"").split(".");
+  const [schrank, regal, fach, unterfach] = parts;
+
+  let out = `Liegt in Schrank ${schrank}`;
+  if(regal) out += `, Regal ${regal} (von oben)`;
+  if(fach) out += `, Fach ${fach}`;
+  if(unterfach) out += `, Unterfach/Schublade ${unterfach}`;
+  return out;
+}
+
+// ---------- render ----------
+function render(list, q){
+  const el = document.getElementById("results");
+  el.innerHTML = "";
+
+  if(!q){
+    el.innerHTML = `<div class="muted">Tippe zum Suchen…</div>`;
+    return;
+  }
+  if(list.length === 0){
+    el.innerHTML = `<div class="muted">Kein Treffer.</div>`;
+    return;
+  }
+
+  list.slice(0, 30).forEach(r=>{
+    const badges = [];
+    if(r.ean) badges.push(`EAN: ${r.ean}`);
+    if(r.mindestbestand) badges.push(`Mindestbestand: ${r.mindestbestand}`);
+
+    el.innerHTML += `
       <div class="item">
-        <div><b>${r.name}</b> (${r.sku})</div>
-        <div class="loc">${r.location}</div>
-      </div>`;
+        <div><b>${r.name || "(ohne Name)"}</b> ${r.sku ? `(${r.sku})` : ""}</div>
+        <div class="loc">${formatLocation(r.location)}</div>
+        ${badges.length ? `<div class="badges">${badges.join(" · ")}</div>` : ""}
+      </div>
+    `;
   });
+}
+
+// ---------- search (gute Teilwort + Alias + Mehrwort) ----------
+function matchesRow(row, tokens){
+  // Suchfeld (vorkomponiert)
+  const hay = normalize([
+    row.name, row.sku, row.ean, row.aliases
+  ].filter(Boolean).join(" "));
+
+  // Alle Tokens müssen irgendwo vorkommen (AND-Suche)
+  return tokens.every(t => hay.includes(t));
 }
 
 function search(q){
-  q=q.toLowerCase();
-  const hits=rows.filter(r=>{
-    return (
-      (r.name||"").toLowerCase().includes(q) ||
-      (r.sku||"").toLowerCase().includes(q) ||
-      (r.aliases||"").toLowerCase().includes(q) ||
-      (r.ean||"").toLowerCase().includes(q)
-    );
-  });
-  render(hits);
+  const tokens = splitTokens(q);
+  if(tokens.length === 0){
+    render([], "");
+    return;
+  }
+  // Priorisierung: kurze Ergebnisse oben (optional)
+  const hits = rows
+    .filter(r => matchesRow(r, tokens))
+    .sort((a,b) => (normalize(a.name).length - normalize(b.name).length));
+  render(hits, q);
 }
 
-fetch(CSV_URL)
-  .then(r=>r.text())
-  .then(t=>{
-    rows=parseCSV(t);
-    document.getElementById("q").addEventListener("input",e=>search(e.target.value));
-  });
+// ---------- init ----------
+(async function init(){
+  const status = document.getElementById("status");
+  try{
+    const res = await fetch(CSV_URL, { cache: "no-store" });
+    const txt = await res.text();
+    rows = parseCSV(txt);
+    status.textContent = `Bereit. ${rows.length} Artikel geladen.`;
+
+    const input = document.getElementById("q");
+    input.addEventListener("input", debounce(e => search(e.target.value), 80));
+    render([], "");
+  } catch(e){
+    status.textContent = "Fehler beim Laden der Daten.";
+  }
+})();
 </script>
 
 </body>
