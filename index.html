@@ -139,9 +139,23 @@ el.innerHTML+=`
 
 function search(q){
 
-q=normalize(q);
+const el=document.getElementById("results");
 
-if(!q){
+const query=normalize(q);
+
+if(query.includes("robin")){
+
+el.innerHTML=`
+<div style="color:red;font-weight:700;font-size:20px;padding:20px 0;">
+Robin hat damit nichts zu tun, such selbst!
+</div>
+`;
+
+return;
+
+}
+
+if(!query){
 render([]);
 return;
 }
@@ -150,7 +164,7 @@ const hits=rows.filter(r=>{
 
 const text=normalize(
 
-(r.name||"")+" "+  
+(r.name||"")+" "+
 (r.Bezeichnung||"")+" "+
 (r.aliases||"")+" "+
 (r.sku||"")+" "+
@@ -158,7 +172,7 @@ const text=normalize(
 
 );
 
-return text.includes(q);
+return text.includes(query);
 
 });
 
