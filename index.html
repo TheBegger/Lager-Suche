@@ -4,194 +4,179 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Die Große Lagersuchmaschine</title>
-
 <style>
-body{
-font-family:system-ui;
-max-width:800px;
-margin:40px auto;
-padding:20px;
-}
-
-h1{
-font-size:32px;
-margin-bottom:20px;
-}
-
-input{
-width:100%;
-font-size:20px;
-padding:16px;
-border-radius:12px;
-border:1px solid #ccc;
-margin-bottom:20px;
-}
-
-.item{
-padding:14px 0;
-border-bottom:1px solid #eee;
-}
-
-.loc{
-font-weight:700;
-margin-top:4px;
-}
-
-.meta{
-color:#555;
-font-size:14px;
-}
+  body{font-family:system-ui;max-width:800px;margin:40px auto;padding:20px}
+  h1{font-size:32px;margin:0 0 18px}
+  input{width:100%;font-size:20px;padding:16px;border-radius:12px;border:1px solid #ccc;margin-bottom:14px}
+  .muted{color:#666;margin:10px 0}
+  .item{padding:14px 0;border-bottom:1px solid #eee}
+  .loc{font-weight:700;margin-top:4px}
+  .meta{color:#555;font-size:14px;margin-top:2px}
 </style>
 </head>
-
 <body>
 
 <h1>Die Große Lagersuchmaschine</h1>
-
-<input id="q" placeholder="Was suchst du?">
-
+<input id="q" placeholder="Was suchst du? (Name, Alias, SKU, EAN)" autocomplete="off">
+<div id="status" class="muted">Lade Daten…</div>
 <div id="results"></div>
 
 <script>
+const CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQkmfxeyM39IFCaumNzHV-WmWqSkZ7efxPrV_tRbKRe_ggInNgtoJEx5xozv-PzyEbfdHQ3EQ9kusdf/pub?output=csv";
 
-const CSV_URL="https://docs.google.com/spreadsheets/d/e/2PACX-1vQkmfxeyM39IFCaumNzHV-WmWqSkZ7efxPrV_tRbKRe_ggInNgtoJEx5xozv-PzyEbfdHQ3EQ9kusdf/pub?output=csv";
-
-let rows=[];
+let rows = [];
 
 function normalize(s){
-return (s||"")
-.toLowerCase()
-.replace(/[ä]/g,"ae")
-.replace(/[ö]/g,"oe")
-.replace(/[ü]/g,"ue")
-.replace(/[ß]/g,"ss");
+  return (s||"")
+    .toString()
+    .toLowerCase()
+    .trim()
+    .replace(/[ä]/g,"ae").replace(/[ö]/g,"oe").replace(/[ü]/g,"ue").replace(/[ß]/g,"ss");
 }
 
+function tokens(q){
+  return normalize(q).replace(/[^a-z0-9]+/g," ").split(/\s+/).filter(Boolean);
+}
+
+// Robust CSV parser (unterstützt Kommas in "..." und doppelte Quotes "")
 function parseCSV(text){
+  const out = [];
+  let i=0, field="", row=[], inQuotes=false;
 
-const lines=text.trim().split(/\r?\n/);
+  while(i < text.length){
+    const c = text[i];
 
-const headers=lines[0].split(",");
+    if(inQuotes){
+      if(c === '"' && text[i+1] === '"'){ field += '"'; i += 2; continue; }
+      if(c === '"'){ inQuotes = false; i++; continue; }
+      field += c; i++; continue;
+    } else {
+      if(c === '"'){ inQuotes = true; i++; continue; }
+      if(c === ','){ row.push(field); field=""; i++; continue; }
+      if(c === '\n' || c === '\r'){
+        if(c === '\r' && text[i+1] === '\n') i++;
+        row.push(field); field="";
+        if(row.some(v => (v||"").trim() !== "")) out.push(row);
+        row=[]; i++; continue;
+      }
+      field += c; i++; continue;
+    }
+  }
+  row.push(field);
+  if(row.some(v => (v||"").trim() !== "")) out.push(row);
 
-return lines.slice(1).map(line=>{
-
-const cols=line.split(",");
-
-let obj={};
-
-headers.forEach((h,i)=>{
-obj[h.trim()]=(cols[i]||"").trim();
-});
-
-return obj;
-
-});
+  const headers = (out.shift()||[]).map(h => (h||"").trim());
+  return out.map(cols => {
+    const obj = {};
+    headers.forEach((h, idx) => obj[h] = (cols[idx]||"").trim());
+    return obj;
+  });
 }
 
 function formatLocation(loc){
+  if(!loc) return "";
 
-if(!loc)return "";
+  let s = loc.toString().trim().replace(/\s+/g,"").replace(/\.$/,"");
+  // akzeptiert S1.2.2.3 oder S1.2.2
+  if(!/^S\d+(\.\d+){1,3}$/i.test(s)) return loc;
 
-let s=loc.replace(/\.$/,"");
+  const p = s.replace(/^S/i,"").split(".");
+  const [schrank, regal, fach, unterfach] = p;
 
-s=s.replace("S","");
-
-const p=s.split(".");
-
-let txt="Liegt in ";
-
-if(p[0]) txt+="Schrank "+p[0];
-if(p[1]) txt+=", Regal "+p[1];
-if(p[2]) txt+=", Fach "+p[2];
-if(p[3]) txt+=", Unterfach "+p[3];
-
-return txt;
-
+  let txt = `Liegt in Schrank ${schrank}`;
+  if(regal) txt += `, Regal ${regal} (von oben)`;
+  if(fach) txt += `, Fach ${fach}`;
+  if(unterfach) txt += `, Unterfach/Schublade ${unterfach}`;
+  return txt;
 }
 
-function render(list){
+function getName(r){
+  return r.name || r.Bezeichnung || "";
+}
 
-const el=document.getElementById("results");
+function getLoc(r){
+  // robust: falls du mal wieder anders benennst
+  return r.location || r.Ablageplatz || r.ablageplatz || "";
+}
 
-el.innerHTML="";
+function render(list, q){
+  const el = document.getElementById("results");
+  el.innerHTML = "";
 
-list.forEach(r=>{
+  if(!q){
+    el.innerHTML = `<div class="muted">Tippe zum Suchen…</div>`;
+    return;
+  }
+  if(list.length === 0){
+    el.innerHTML = `<div class="muted">Kein Treffer.</div>`;
+    return;
+  }
 
-const loc=r.location||r.Ablageplatz||"";
+  list.slice(0, 30).forEach(r=>{
+    const name = getName(r);
+    const sku = r.sku || "";
+    const ean = r.ean || "";
+    const loc = getLoc(r);
+    const mb  = r.mindestbestand || "";
 
-el.innerHTML+=`
+    el.innerHTML += `
+      <div class="item">
+        <div><b>${name}</b> ${sku ? `(${sku})` : ""}</div>
+        <div class="loc">${formatLocation(loc)}</div>
+        <div class="meta">
+          ${ean ? `EAN: ${ean}` : ``}
+          ${ean && mb ? ` · ` : ``}
+          ${mb ? `Mindestbestand: ${mb}` : ``}
+        </div>
+      </div>
+    `;
+  });
+}
 
-<div class="item">
+function matchesRow(r, toks){
+  const hay = normalize([
+    getName(r),
+    r.aliases,
+    r.sku,
+    r.ean
+  ].filter(Boolean).join(" "));
 
-<div><b>${r.name||r.Bezeichnung||""}</b></div>
-
-<div class="meta">${r.sku||""}</div>
-
-<div class="loc">${formatLocation(loc)}</div>
-
-</div>
-
-`;
-
-});
-
+  // AND-Suche: alle Wörter müssen vorkommen
+  return toks.every(t => hay.includes(t));
 }
 
 function search(q){
+  const el = document.getElementById("results");
+  const qn = normalize(q);
 
-const el=document.getElementById("results");
+  if(qn.includes("robin")){
+    el.innerHTML = `
+      <div style="color:red;font-weight:700;font-size:20px;padding:20px 0;">
+        Robin hat damit nichts zu tun, such selbst!
+      </div>`;
+    return;
+  }
 
-const query=normalize(q);
+  const toks = tokens(q);
+  if(toks.length === 0){ render([], ""); return; }
 
-if(query.includes("robin")){
-
-el.innerHTML=`
-<div style="color:red;font-weight:700;font-size:20px;padding:20px 0;">
-Robin hat damit nichts zu tun, such selbst!
-</div>
-`;
-
-return;
-
+  const hits = rows.filter(r => matchesRow(r, toks));
+  render(hits, q);
 }
 
-if(!query){
-render([]);
-return;
-}
-
-const hits=rows.filter(r=>{
-
-const text=normalize(
-
-(r.name||"")+" "+
-(r.Bezeichnung||"")+" "+
-(r.aliases||"")+" "+
-(r.sku||"")+" "+
-(r.ean||"")
-
-);
-
-return text.includes(query);
-
-});
-
-render(hits);
-
-}
-
-fetch(CSV_URL)
-
-.then(r=>r.text())
-
-.then(t=>{
-
-rows=parseCSV(t);
-
-document.getElementById("q").addEventListener("input",e=>search(e.target.value));
-
-});
-
+(async function init(){
+  const status = document.getElementById("status");
+  try{
+    const res = await fetch(CSV_URL, { cache: "no-store" });
+    const txt = await res.text();
+    rows = parseCSV(txt);
+    status.textContent = `Bereit. ${rows.length} Artikel geladen.`;
+    document.getElementById("q").addEventListener("input", e => search(e.target.value));
+    render([], "");
+  } catch(e){
+    status.textContent = "Fehler beim Laden der Daten.";
+  }
+})();
 </script>
 
 </body>
