@@ -5,26 +5,26 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Die Große Lagersuchmaschine</title>
 <style>
-  body{font-family:system-ui;max-width:900px;margin:32px auto;padding:20px}
-  h1{font-size:32px;margin:0 0 14px}
-  input{width:100%;font-size:20px;padding:16px;border-radius:12px;border:1px solid #ccc;margin:12px 0 14px}
-  .muted{color:#666;margin:8px 0}
+  body{font-family:system-ui;max-width:900px;margin:0 auto;padding:16px}
+  h1{font-size:28px;margin:10px 0 10px;line-height:1.15}
+  input{width:100%;font-size:18px;padding:14px;border-radius:14px;border:1px solid #ccc;margin:10px 0 10px}
+  .muted{color:#666;margin:6px 0}
   .item{padding:14px 0;border-bottom:1px solid #eee}
   .loc{font-weight:800;margin-top:6px}
   .meta{color:#555;font-size:14px;margin-top:4px}
 
   .banner{
     background:#d00000;color:#fff;font-weight:900;
-    padding:12px 14px;border-radius:12px;margin:0 0 16px;
+    padding:12px 14px;border-radius:14px;margin:0 0 14px;
     text-align:center;letter-spacing:.2px;
     animation: blink 1s steps(2, jump-none) infinite;
   }
   @keyframes blink{ 0%{opacity:1} 50%{opacity:.15} 100%{opacity:1} }
 
-  .actions{display:flex;gap:10px;align-items:center;margin:10px 0 18px}
   .btn{
-    border:1px solid #ccc;background:#fff;border-radius:12px;
-    padding:10px 12px;font-size:14px;font-weight:700;
+    width:100%;
+    border:1px solid #ccc;background:#fff;border-radius:14px;
+    padding:12px 12px;font-size:15px;font-weight:800;
   }
 
   dialog{
@@ -38,6 +38,7 @@
     font-size:16px;padding:12px;border-radius:12px;border:1px solid #ccc;
   }
   .dlg-actions{display:flex;gap:10px;justify-content:flex-end;margin-top:10px}
+  .dlg-actions .btn{width:auto}
 </style>
 </head>
 <body>
@@ -45,20 +46,20 @@
 <div class="banner">Noch in bearbeitung - Media &amp; Kreativteam</div>
 
 <h1>Die Große Lagersuchmaschine</h1>
+
 <input id="q" placeholder="Was suchst du? (Name, Alias, SKU, EAN)" autocomplete="off">
 
-<div class="actions">
-  <button class="btn" id="bugBtn" type="button">Du hast einen Fehler gefunden?</button>
-  <div id="status" class="muted">Lade Daten…</div>
-</div>
+<!-- 1) Erst Status-Zeile -->
+<div id="status" class="muted">Lade Daten…</div>
 
-<div id="results"></div>
+<!-- 2) Darunter Button -->
+<button class="btn" id="bugBtn" type="button">Du hast einen Fehler gefunden?</button>
+
+<div id="results" style="margin-top:10px"></div>
 
 <dialog id="bugDialog">
   <h3 style="margin:0 0 10px;">Fehler melden</h3>
-  <div class="muted" style="margin:0 0 10px;">
-    Öffnet deine Mail-App mit einer vorgefüllten Nachricht.
-  </div>
+  <div class="muted" style="margin:0 0 10px;">Öffnet deine Mail-App mit einer vorgefüllten Nachricht.</div>
   <textarea id="bugText" placeholder="Was stimmt nicht? (Artikel, Lagerplatz, Tippfehler, etc.)"></textarea>
   <div class="dlg-actions">
     <button class="btn" id="cancelBug" type="button">Abbrechen</button>
@@ -192,7 +193,7 @@ function search(q){
 
   if(qn.includes("robin")){
     el.innerHTML = `
-      <div style="color:red;font-weight:900;font-size:20px;padding:16px 0;">
+      <div style="color:red;font-weight:900;font-size:18px;padding:14px 0;">
         Robin hat damit nichts zu tun, such selbst!
       </div>`;
     return;
