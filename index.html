@@ -7,7 +7,14 @@
 <style>
   body{font-family:system-ui;max-width:900px;margin:0 auto;padding:16px}
   h1{font-size:28px;margin:10px 0 6px;line-height:1.15}
+  .toprow{display:flex;align-items:center;justify-content:space-between;gap:12px}
   .sub{color:#666;font-size:14px;margin:0 0 12px}
+  .infoBtn{
+    width:34px;height:34px;min-width:34px;
+    border-radius:999px;border:1px solid #ccc;background:#fff;
+    font-weight:900;font-size:16px;line-height:32px;text-align:center;
+    padding:0;cursor:pointer;
+  }
   input{width:100%;font-size:18px;padding:14px;border-radius:14px;border:1px solid #ccc;margin:10px 0 10px}
   .muted{color:#666;margin:6px 0}
   .btn{
@@ -17,11 +24,12 @@
   }
   .item{padding:14px 0;border-bottom:1px solid #eee}
   .loc{font-weight:800;margin-top:6px}
+  .hint{color:#444;font-size:14px;margin-top:4px}
   .meta{color:#555;font-size:14px;margin-top:4px}
   .footer{margin-top:28px;padding-top:14px;border-top:1px solid #eee;color:#666;font-size:13px;text-align:center}
 
   dialog{
-    width:min(560px, 96vw);
+    width:min(620px, 96vw);
     border:none;border-radius:16px;padding:16px 16px 12px;
     box-shadow:0 10px 40px rgba(0,0,0,.2);
   }
@@ -36,8 +44,13 @@
 </head>
 <body>
 
-<h1>Die Große Lagersuchmaschine</h1>
-<div class="sub">Zuletzt aktualisiert: <span id="lastUpdated">–</span></div>
+<div class="toprow">
+  <div>
+    <h1>Die Große Lagersuchmaschine</h1>
+    <div class="sub">Zuletzt aktualisiert: <span id="lastUpdated">–</span></div>
+  </div>
+  <button class="infoBtn" id="infoBtn" type="button" aria-label="Info">i</button>
+</div>
 
 <input id="q" placeholder="Was suchst du? (Name, Alias, SKU, EAN)" autocomplete="off">
 
@@ -45,6 +58,19 @@
 <button class="btn" id="bugBtn" type="button">Du hast einen Fehler gefunden?</button>
 
 <div id="results" style="margin-top:10px"></div>
+
+<dialog id="infoDialog">
+  <h3 style="margin:0 0 10px;">Info</h3>
+  <div class="muted" style="margin:0 0 10px;">
+    Die Schränke sind von <b>1–6</b> von <b>links nach rechts</b> beschriftet.<br>
+    Die <b>Regale</b> zählen von <b>oben nach unten</b>.<br>
+    Innerhalb eines Regals sind <b>Fächer/Plätze</b> von <b>links nach rechts</b> nummeriert.<br>
+    Wenn es ein Unterfach/Schublade gibt, kommt es als vierte Zahl dazu.
+  </div>
+  <div class="dlg-actions">
+    <button class="btn" id="closeInfo" type="button">Schließen</button>
+  </div>
+</dialog>
 
 <dialog id="bugDialog">
   <h3 style="margin:0 0 10px;">Fehler melden</h3>
@@ -69,7 +95,6 @@ function normalize(s){
     .replace(/[ä]/g,"ae").replace(/[ö]/g,"oe").replace(/[ü]/g,"ue").replace(/[ß]/g,"ss");
 }
 function splitTokens(q){
-  // erlaubt Kombinationen aus Name + Alias + mehrere Wörter
   return normalize(q).replace(/[^a-z0-9]+/g," ").split(/\s+/).filter(Boolean);
 }
 
@@ -110,6 +135,22 @@ function parseCSV(text){
 function getName(r){ return r.name || r.Bezeichnung || ""; }
 function getLocRaw(r){ return r.location || r.Ablageplatz || r.ablageplatz || ""; }
 
+function verticalHint(regalNum){
+  const n = Number(regalNum);
+  if(!Number.isFinite(n)) return "";
+  if(n < 3) return " (ziemlich weit oben)";
+  if(n > 5) return " (relativ weit unten)";
+  return "";
+}
+function horizontalHint(fachNum){
+  const n = Number(fachNum);
+  if(!Number.isFinite(n)) return "";
+  // grobe Orientierung: 1-2 links, ab 4 rechts, sonst neutral
+  if(n <= 2) return " (links)";
+  if(n >= 4) return " (rechts)";
+  return "";
+}
+
 function formatLocation(locRaw){
   if(!locRaw) return "";
   let loc = locRaw.toString().trim();
@@ -136,12 +177,13 @@ function formatLocation(locRaw){
   const m = code.match(/^([SRL])\.?(\d+(?:\.\d+){0,3})$/i);
   if(!m) return `Liegt bei: ${locRaw}`;
 
-  const parts = m[2].split(".");
-  const labels = ["Schrank", "Regal", "Fach", "Unterfach"];
-  let txt = "Liegt in ";
-  for(let i=0;i<parts.length && i<labels.length;i++){
-    txt += `${labels[i]} ${parts[i]}${i < parts.length-1 ? ", " : ""}`;
-  }
+  const parts = m[2].split("."); // 1..4 Zahlen
+  const [schrank, regal, fach, unterfach] = parts;
+
+  let txt = `Liegt in Schrank ${schrank}`;
+  if(regal) txt += `, Regal ${regal}${verticalHint(regal)} (von oben)`;
+  if(fach) txt += `, Fach ${fach}${horizontalHint(fach)}`;
+  if(unterfach) txt += `, Unterfach ${unterfach}`;
   return txt;
 }
 
@@ -150,7 +192,14 @@ function render(list, q){
   el.innerHTML = "";
 
   if(!q){ el.innerHTML = `<div class="muted">Tippe zum Suchen…</div>`; return; }
-  if(list.length === 0){ el.innerHTML = `<div class="muted">Kein Treffer.</div>`; return; }
+
+  if(list.length === 0){
+    el.innerHTML = `
+      <div class="muted">Kein Treffer.</div>
+      <div class="hint">Der Artikel, den du suchst, liegt möglicherweise hinten im Regal.</div>
+    `;
+    return;
+  }
 
   list.slice(0, 30).forEach(r=>{
     const name = getName(r);
@@ -174,13 +223,9 @@ function render(list, q){
 }
 
 function matchesRow(r, toks){
-  // Alias-Teile + Name-Teile: wir suchen über alles zusammen
-  // Zusätzlich: aliases werden an Kommas/Leerzeichen gesplittet, damit Teilwörter sicher drin sind
   const aliasExpanded = (r.aliases || "").replace(/[,;]+/g," ");
   const hay = normalize([ getName(r), aliasExpanded, r.sku, r.ean ].filter(Boolean).join(" "));
-
-  // AND-Suche: alle Suchwörter müssen vorkommen (kombiniert möglich)
-  return toks.every(t => hay.includes(t));
+  return toks.every(t => hay.includes(t)); // Kombination aus Name+Alias möglich
 }
 
 function search(q){
@@ -199,6 +244,11 @@ function search(q){
   const hits = rows.filter(r => matchesRow(r, toks));
   render(hits, q);
 }
+
+// ---- Info dialog ----
+const infoDialog = document.getElementById("infoDialog");
+document.getElementById("infoBtn").addEventListener("click", ()=>infoDialog.showModal());
+document.getElementById("closeInfo").addEventListener("click", ()=>infoDialog.close());
 
 // ---- Bug report mailto ----
 const bugDialog = document.getElementById("bugDialog");
@@ -240,7 +290,6 @@ Aktuelle Suche: ${currentQuery || "(leer)"}
     rows = parseCSV(txt);
     status.textContent = `Bereit. ${rows.length} Artikel geladen.`;
 
-    // "Zuletzt aktualisiert" = jetzt (Zeitpunkt des Ladens)
     const d = new Date();
     const dateStr = d.toLocaleDateString("de-DE", { year:"numeric", month:"2-digit", day:"2-digit" }) +
                     " " +
