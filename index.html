@@ -7,7 +7,7 @@
 <style>
   body{font-family:system-ui;max-width:900px;margin:0 auto;padding:16px}
   h1{font-size:28px;margin:10px 0 6px;line-height:1.15}
-  .toprow{display:flex;align-items:center;justify-content:space-between;gap:12px}
+  .toprow{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
   .sub{color:#666;font-size:14px;margin:0 0 12px}
   .infoBtn{
     width:34px;height:34px;min-width:34px;
@@ -90,6 +90,11 @@ const BUG_MAIL_TO = "timo.b@me.com";
 
 let rows = [];
 
+// Indizes für "ganz oben/unten" und "ganz links/rechts"
+const maxRegalBySchrank = new Map();              // schrank -> maxRegal
+const minRegalBySchrank = new Map();              // schrank -> minRegal (optional)
+const minMaxFachBySchrankRegal = new Map();       // "schrank|regal" -> {min,max}
+
 function normalize(s){
   return (s||"").toString().toLowerCase().trim()
     .replace(/[ä]/g,"ae").replace(/[ö]/g,"oe").replace(/[ü]/g,"ue").replace(/[ß]/g,"ss");
@@ -135,27 +140,91 @@ function parseCSV(text){
 function getName(r){ return r.name || r.Bezeichnung || ""; }
 function getLocRaw(r){ return r.location || r.Ablageplatz || r.ablageplatz || ""; }
 
-function verticalHint(regalNum){
-  const n = Number(regalNum);
-  if(!Number.isFinite(n)) return "";
-  if(n < 3) return " (ziemlich weit oben)";
-  if(n > 5) return " (relativ weit unten)";
+// parse location code like: S3.4.6.5 / S.3.4.6.5 / R.1.2.10 / R1.1.3 / L.1.1.1
+// returns {schrank, regal, fach, unterfach} or null if not a numeric code
+function parseNumericLoc(locRaw){
+  if(!locRaw) return null;
+  const loc = locRaw.toString().trim().replace(/\s+/g,"").replace(/\.$/,"");
+  const m = loc.match(/^([SRL])\.?(\d+(?:\.\d+){0,3})$/i);
+  if(!m) return null;
+  const parts = m[2].split(".");
+  const nums = parts.map(x => Number(x));
+  if(nums.some(n => !Number.isFinite(n))) return null;
+  return {
+    schrank: nums[0] ?? null,
+    regal: nums[1] ?? null,
+    fach: nums[2] ?? null,
+    unterfach: nums[3] ?? null
+  };
+}
+
+function buildLocationIndexes(){
+  maxRegalBySchrank.clear();
+  minRegalBySchrank.clear();
+  minMaxFachBySchrankRegal.clear();
+
+  for(const r of rows){
+    const p = parseNumericLoc(getLocRaw(r));
+    if(!p || !p.schrank || !p.regal) continue;
+
+    // Regal min/max pro Schrank
+    const schrankKey = String(p.schrank);
+    const curMax = maxRegalBySchrank.get(schrankKey);
+    if(curMax === undefined || p.regal > curMax) maxRegalBySchrank.set(schrankKey, p.regal);
+
+    const curMin = minRegalBySchrank.get(schrankKey);
+    if(curMin === undefined || p.regal < curMin) minRegalBySchrank.set(schrankKey, p.regal);
+
+    // Fach min/max pro (Schrank,Regal)
+    if(p.fach){
+      const key = `${p.schrank}|${p.regal}`;
+      const mm = minMaxFachBySchrankRegal.get(key) || {min: p.fach, max: p.fach};
+      mm.min = Math.min(mm.min, p.fach);
+      mm.max = Math.max(mm.max, p.fach);
+      minMaxFachBySchrankRegal.set(key, mm);
+    }
+  }
+}
+
+function verticalHint(schrank, regal){
+  const r = Number(regal);
+  if(!Number.isFinite(r)) return "";
+
+  // absolut
+  if(r === 1) return " (ganz oben)";
+
+  const maxR = maxRegalBySchrank.get(String(schrank));
+  if(Number.isFinite(maxR) && r === maxR) return " (ganz unten)";
+
+  // fallback grob
+  if(r < 3) return " (ziemlich weit oben)";
+  if(r > 5) return " (relativ weit unten)";
   return "";
 }
-function horizontalHint(fachNum){
-  const n = Number(fachNum);
-  if(!Number.isFinite(n)) return "";
-  // grobe Orientierung: 1-2 links, ab 4 rechts, sonst neutral
-  if(n <= 2) return " (links)";
-  if(n >= 4) return " (rechts)";
+
+function horizontalHint(schrank, regal, fach){
+  const f = Number(fach);
+  if(!Number.isFinite(f)) return "";
+
+  // absolut
+  if(f === 1) return " (ganz links)";
+
+  const key = `${schrank}|${regal}`;
+  const mm = minMaxFachBySchrankRegal.get(key);
+  if(mm && Number.isFinite(mm.max) && f === mm.max) return " (ganz rechts)";
+  if(mm && Number.isFinite(mm.min) && f === mm.min) return " (ganz links)";
+
+  // fallback grob
+  if(f <= 2) return " (links)";
+  if(f >= 4) return " (rechts)";
   return "";
 }
 
 function formatLocation(locRaw){
   if(!locRaw) return "";
-  let loc = locRaw.toString().trim();
+  const loc = locRaw.toString().trim();
 
-  // Text-Orte (Küche/Wand/offen)
+  // Text-Orte
   const simple = loc.replace(/\s+/g," ").trim();
   const simpleNorm = normalize(simple);
   if(["kueche","kuche","wand","offen"].includes(simpleNorm)){
@@ -172,18 +241,13 @@ function formatLocation(locRaw){
     return `Liegt an Schrank ${schrank}, Türe ${side}`;
   }
 
-  // Codes: S3.4.6.5 / S.3.4.6.5 / R.1.2.10 / R1.1.3 / L.1.1.1
-  let code = loc.replace(/\s+/g,"").replace(/\.$/,"");
-  const m = code.match(/^([SRL])\.?(\d+(?:\.\d+){0,3})$/i);
-  if(!m) return `Liegt bei: ${locRaw}`;
+  const p = parseNumericLoc(locRaw);
+  if(!p) return `Liegt bei: ${locRaw}`;
 
-  const parts = m[2].split("."); // 1..4 Zahlen
-  const [schrank, regal, fach, unterfach] = parts;
-
-  let txt = `Liegt in Schrank ${schrank}`;
-  if(regal) txt += `, Regal ${regal}${verticalHint(regal)} (von oben)`;
-  if(fach) txt += `, Fach ${fach}${horizontalHint(fach)}`;
-  if(unterfach) txt += `, Unterfach ${unterfach}`;
+  let txt = `Liegt in Schrank ${p.schrank}`;
+  if(p.regal != null) txt += `, Regal ${p.regal}${verticalHint(p.schrank, p.regal)}`;
+  if(p.fach != null) txt += `, Fach ${p.fach}${horizontalHint(p.schrank, p.regal, p.fach)}`;
+  if(p.unterfach != null) txt += `, Unterfach ${p.unterfach}`;
   return txt;
 }
 
@@ -223,9 +287,10 @@ function render(list, q){
 }
 
 function matchesRow(r, toks){
+  // aliases kommagetrennt -> aufsplitten, damit Teilwörter gut matchen
   const aliasExpanded = (r.aliases || "").replace(/[,;]+/g," ");
   const hay = normalize([ getName(r), aliasExpanded, r.sku, r.ean ].filter(Boolean).join(" "));
-  return toks.every(t => hay.includes(t)); // Kombination aus Name+Alias möglich
+  return toks.every(t => hay.includes(t));
 }
 
 function search(q){
@@ -288,6 +353,9 @@ Aktuelle Suche: ${currentQuery || "(leer)"}
     const res = await fetch(CSV_URL, { cache: "no-store" });
     const txt = await res.text();
     rows = parseCSV(txt);
+
+    buildLocationIndexes();
+
     status.textContent = `Bereit. ${rows.length} Artikel geladen.`;
 
     const d = new Date();
