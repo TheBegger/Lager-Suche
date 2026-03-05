@@ -6,26 +6,19 @@
 <title>Die Große Lagersuchmaschine</title>
 <style>
   body{font-family:system-ui;max-width:900px;margin:0 auto;padding:16px}
-  h1{font-size:28px;margin:10px 0 10px;line-height:1.15}
+  h1{font-size:28px;margin:10px 0 6px;line-height:1.15}
+  .sub{color:#666;font-size:14px;margin:0 0 12px}
   input{width:100%;font-size:18px;padding:14px;border-radius:14px;border:1px solid #ccc;margin:10px 0 10px}
   .muted{color:#666;margin:6px 0}
-  .item{padding:14px 0;border-bottom:1px solid #eee}
-  .loc{font-weight:800;margin-top:6px}
-  .meta{color:#555;font-size:14px;margin-top:4px}
-
-  .banner{
-    background:#d00000;color:#fff;font-weight:900;
-    padding:12px 14px;border-radius:14px;margin:0 0 14px;
-    text-align:center;letter-spacing:.2px;
-    animation: blink 1s steps(2, jump-none) infinite;
-  }
-  @keyframes blink{ 0%{opacity:1} 50%{opacity:.15} 100%{opacity:1} }
-
   .btn{
     width:100%;
     border:1px solid #ccc;background:#fff;border-radius:14px;
     padding:12px 12px;font-size:15px;font-weight:800;
   }
+  .item{padding:14px 0;border-bottom:1px solid #eee}
+  .loc{font-weight:800;margin-top:6px}
+  .meta{color:#555;font-size:14px;margin-top:4px}
+  .footer{margin-top:28px;padding-top:14px;border-top:1px solid #eee;color:#666;font-size:13px;text-align:center}
 
   dialog{
     width:min(560px, 96vw);
@@ -43,16 +36,12 @@
 </head>
 <body>
 
-<div class="banner">Noch in bearbeitung - Media &amp; Kreativteam</div>
-
 <h1>Die Große Lagersuchmaschine</h1>
+<div class="sub">Zuletzt aktualisiert: <span id="lastUpdated">–</span></div>
 
 <input id="q" placeholder="Was suchst du? (Name, Alias, SKU, EAN)" autocomplete="off">
 
-<!-- 1) Erst Status-Zeile -->
 <div id="status" class="muted">Lade Daten…</div>
-
-<!-- 2) Darunter Button -->
 <button class="btn" id="bugBtn" type="button">Du hast einen Fehler gefunden?</button>
 
 <div id="results" style="margin-top:10px"></div>
@@ -67,6 +56,8 @@
   </div>
 </dialog>
 
+<div class="footer">Erstellt vom Medien- &amp; Kreativteam</div>
+
 <script>
 const CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQkmfxeyM39IFCaumNzHV-WmWqSkZ7efxPrV_tRbKRe_ggInNgtoJEx5xozv-PzyEbfdHQ3EQ9kusdf/pub?output=csv";
 const BUG_MAIL_TO = "timo.b@me.com";
@@ -77,7 +68,8 @@ function normalize(s){
   return (s||"").toString().toLowerCase().trim()
     .replace(/[ä]/g,"ae").replace(/[ö]/g,"oe").replace(/[ü]/g,"ue").replace(/[ß]/g,"ss");
 }
-function tokens(q){
+function splitTokens(q){
+  // erlaubt Kombinationen aus Name + Alias + mehrere Wörter
   return normalize(q).replace(/[^a-z0-9]+/g," ").split(/\s+/).filter(Boolean);
 }
 
@@ -120,10 +112,9 @@ function getLocRaw(r){ return r.location || r.Ablageplatz || r.ablageplatz || ""
 
 function formatLocation(locRaw){
   if(!locRaw) return "";
-
   let loc = locRaw.toString().trim();
 
-  // Text-Orte
+  // Text-Orte (Küche/Wand/offen)
   const simple = loc.replace(/\s+/g," ").trim();
   const simpleNorm = normalize(simple);
   if(["kueche","kuche","wand","offen"].includes(simpleNorm)){
@@ -183,23 +174,26 @@ function render(list, q){
 }
 
 function matchesRow(r, toks){
-  const hay = normalize([ getName(r), r.aliases, r.sku, r.ean ].filter(Boolean).join(" "));
+  // Alias-Teile + Name-Teile: wir suchen über alles zusammen
+  // Zusätzlich: aliases werden an Kommas/Leerzeichen gesplittet, damit Teilwörter sicher drin sind
+  const aliasExpanded = (r.aliases || "").replace(/[,;]+/g," ");
+  const hay = normalize([ getName(r), aliasExpanded, r.sku, r.ean ].filter(Boolean).join(" "));
+
+  // AND-Suche: alle Suchwörter müssen vorkommen (kombiniert möglich)
   return toks.every(t => hay.includes(t));
 }
 
 function search(q){
-  const el = document.getElementById("results");
   const qn = normalize(q);
-
   if(qn.includes("robin")){
-    el.innerHTML = `
+    document.getElementById("results").innerHTML = `
       <div style="color:red;font-weight:900;font-size:18px;padding:14px 0;">
         Robin hat damit nichts zu tun, such selbst!
       </div>`;
     return;
   }
 
-  const toks = tokens(q);
+  const toks = splitTokens(q);
   if(toks.length === 0){ render([], ""); return; }
 
   const hits = rows.filter(r => matchesRow(r, toks));
@@ -207,15 +201,14 @@ function search(q){
 }
 
 // ---- Bug report mailto ----
-const bugBtn = document.getElementById("bugBtn");
 const bugDialog = document.getElementById("bugDialog");
 const bugText = document.getElementById("bugText");
-document.getElementById("cancelBug").addEventListener("click", ()=>bugDialog.close());
 
-bugBtn.addEventListener("click", ()=>{
+document.getElementById("bugBtn").addEventListener("click", ()=>{
   bugText.value = "";
   bugDialog.showModal();
 });
+document.getElementById("cancelBug").addEventListener("click", ()=>bugDialog.close());
 
 document.getElementById("sendBug").addEventListener("click", ()=>{
   const msg = bugText.value.trim();
@@ -246,10 +239,19 @@ Aktuelle Suche: ${currentQuery || "(leer)"}
     const txt = await res.text();
     rows = parseCSV(txt);
     status.textContent = `Bereit. ${rows.length} Artikel geladen.`;
+
+    // "Zuletzt aktualisiert" = jetzt (Zeitpunkt des Ladens)
+    const d = new Date();
+    const dateStr = d.toLocaleDateString("de-DE", { year:"numeric", month:"2-digit", day:"2-digit" }) +
+                    " " +
+                    d.toLocaleTimeString("de-DE", { hour:"2-digit", minute:"2-digit" });
+    document.getElementById("lastUpdated").textContent = dateStr;
+
     document.getElementById("q").addEventListener("input", e => search(e.target.value));
     render([], "");
   } catch(e){
     status.textContent = "Fehler beim Laden der Daten.";
+    document.getElementById("lastUpdated").textContent = "–";
   }
 })();
 </script>
