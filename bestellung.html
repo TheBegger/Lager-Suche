@@ -19,12 +19,9 @@
     width:100%;border:1px solid #ccc;background:#fff;border-radius:14px;
     padding:13px 12px;font-size:16px;font-weight:800;margin-top:10px;
   }
-  .btnPrimary{
-    background:#111;color:#fff;border-color:#111;
-  }
-  .btnAccent{
-    background:#e9f2ff;border-color:#8bb6ff;color:#124191;
-  }
+  .btnPrimary{background:#111;color:#fff;border-color:#111}
+  .btnAccent{background:#e9f2ff;border-color:#8bb6ff;color:#124191}
+  .btnDanger{background:#fff0f0;border-color:#ffb3b3;color:#a40000}
   .btnRow{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:14px}
   .tripleRow{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-top:12px}
   .counterWrap{text-align:center;padding:10px 0}
@@ -37,22 +34,16 @@
   .progress{font-size:14px;color:#666;margin-bottom:10px}
   .articleName{font-size:26px;font-weight:900;line-height:1.15}
   .articleLoc{font-size:14px;color:#666;margin-top:6px}
-
   .listItem{
     padding:12px 0;border-bottom:1px solid #eee;
     display:grid;grid-template-columns:1fr auto;gap:10px;align-items:center;
   }
-  .listRight{
-    display:flex;align-items:center;gap:8px;
-  }
+  .listRight{display:flex;align-items:center;gap:8px}
   .miniBtn{
     width:36px;height:36px;border-radius:10px;border:1px solid #ccc;background:#fff;
     font-size:20px;font-weight:900;line-height:1;display:flex;align-items:center;justify-content:center;
   }
-  .qtyBox{
-    min-width:42px;text-align:center;font-weight:900;font-size:18px;
-  }
-
+  .qtyBox{min-width:42px;text-align:center;font-weight:900;font-size:18px}
   .footer{margin-top:28px;padding-top:14px;border-top:1px solid #eee;color:#666;font-size:13px;text-align:center}
   .summaryLine{padding:10px 0;border-bottom:1px solid #eee}
 </style>
@@ -66,7 +57,7 @@
 <script>
 const CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQkmfxeyM39IFCaumNzHV-WmWqSkZ7efxPrV_tRbKRe_ggInNgtoJEx5xozv-PzyEbfdHQ3EQ9kusdf/pub?output=csv";
 const MAIL_TO = "timo.b@me.com";
-const STORAGE_KEY = "lagerbestellung_v2";
+const STORAGE_KEY = "lagerbestellung_v3";
 
 let rows = [];
 let articles = [];
@@ -87,6 +78,10 @@ function todayString(){
   const d = new Date();
   return d.toLocaleDateString("de-DE", { year:"numeric", month:"2-digit", day:"2-digit" }) + " " +
          d.toLocaleTimeString("de-DE", { hour:"2-digit", minute:"2-digit" });
+}
+function todayKey(){
+  const d = new Date();
+  return d.toLocaleDateString("de-DE", { year:"numeric", month:"2-digit", day:"2-digit" });
 }
 function escapeHtml(str){
   return (str||"").toString()
@@ -116,6 +111,12 @@ function incAmount(id){
 }
 function decAmount(id){
   setAmount(id, Math.max(0, getAmount(id) - 1));
+}
+function resetAllData(){
+  userName = "";
+  currentIndex = 0;
+  orderAmounts = {};
+  saveState();
 }
 
 // ---------- CSV parser ----------
@@ -192,7 +193,8 @@ function saveState(){
   localStorage.setItem(STORAGE_KEY, JSON.stringify({
     userName,
     currentIndex,
-    orderAmounts
+    orderAmounts,
+    savedDate: todayKey()
   }));
 }
 function loadState(){
@@ -200,6 +202,13 @@ function loadState(){
     const raw = localStorage.getItem(STORAGE_KEY);
     if(!raw) return;
     const data = JSON.parse(raw);
+
+    // automatischer Tages-Reset
+    if(data.savedDate !== todayKey()){
+      localStorage.removeItem(STORAGE_KEY);
+      return;
+    }
+
     userName = data.userName || "";
     currentIndex = Number.isFinite(data.currentIndex) ? data.currentIndex : 0;
     orderAmounts = data.orderAmounts || {};
@@ -219,7 +228,9 @@ function renderTopNav(showListButton=true){
   return `
     <div class="tripleRow">
       <button class="btn btnAccent" id="prevTopBtn" type="button">Vorheriger Artikel</button>
-      ${showListButton ? `<button class="btn btnAccent" id="openListTopBtn" type="button">Bestellliste</button>` : `<button class="btn btnAccent" id="backToCounterTopBtn" type="button">Zurück zum Artikel</button>`}
+      ${showListButton
+        ? `<button class="btn btnAccent" id="openListTopBtn" type="button">Bestellliste</button>`
+        : `<button class="btn btnAccent" id="backToCounterTopBtn" type="button">Zurück zum Artikel</button>`}
       <button class="btn btnPrimary" id="finishTopBtn" type="button">Bestellung abschließen</button>
     </div>
   `;
@@ -266,6 +277,7 @@ function renderStart(){
       <input id="nameInput" type="text" placeholder="Dein Name" value="${escapeHtml(userName)}">
       <button class="btn btnPrimary" id="startBtn" type="button">Bestand zählen</button>
       <button class="btn" id="openListBtn" type="button">Bestellliste öffnen</button>
+      <button class="btn btnDanger" id="resetBtnStart" type="button">Zurücksetzen</button>
     </div>
   `;
 
@@ -289,6 +301,13 @@ function renderStart(){
     userName = val || userName;
     saveState();
     renderArticleList();
+  });
+
+  document.getElementById("resetBtnStart").addEventListener("click", ()=>{
+    if(confirm("Name und alle Zähler wirklich zurücksetzen?")){
+      resetAllData();
+      renderStart();
+    }
   });
 }
 
@@ -334,6 +353,8 @@ function renderCounter(){
           ? `<button class="btn btnPrimary" id="nextBtn" type="button">Jetzt bestellen</button>`
           : `<button class="btn btnAccent" id="nextBtn" type="button">Nächster Artikel</button>`}
       </div>
+
+      <button class="btn btnDanger" id="resetBtnCounter" type="button">Zurücksetzen</button>
     </div>
   `;
 
@@ -366,6 +387,13 @@ function renderCounter(){
       renderSummary();
     }
   });
+
+  document.getElementById("resetBtnCounter").addEventListener("click", ()=>{
+    if(confirm("Name und alle Zähler wirklich zurücksetzen?")){
+      resetAllData();
+      renderStart();
+    }
+  });
 }
 
 function listItemHtml(a, idx){
@@ -386,7 +414,7 @@ function listItemHtml(a, idx){
   `;
 }
 
-function bindListControls(){
+function bindListControls(currentSearch=""){
   document.querySelectorAll(".listItem .listMain").forEach(el=>{
     el.addEventListener("click", ()=>{
       const parent = el.closest(".listItem");
@@ -400,7 +428,7 @@ function bindListControls(){
     btn.addEventListener("click", (e)=>{
       e.stopPropagation();
       decAmount(btn.dataset.id);
-      renderArticleList(document.getElementById("listSearch")?.value || "");
+      renderArticleList(currentSearch);
     });
   });
 
@@ -408,7 +436,7 @@ function bindListControls(){
     btn.addEventListener("click", (e)=>{
       e.stopPropagation();
       incAmount(btn.dataset.id);
-      renderArticleList(document.getElementById("listSearch")?.value || "");
+      renderArticleList(currentSearch);
     });
   });
 }
@@ -446,11 +474,13 @@ function renderArticleList(searchValue=""){
         <button class="btn" id="backToCounterBtn" type="button">Zum aktuellen Artikel</button>
         <button class="btn btnPrimary" id="toSummaryBtn" type="button">Bestellung abschließen</button>
       </div>
+
+      <button class="btn btnDanger" id="resetBtnList" type="button">Zurücksetzen</button>
     </div>
   `;
 
   bindCommonTopNav(false);
-  bindListControls();
+  bindListControls(searchValue);
 
   document.getElementById("listSearch").addEventListener("input", (e)=>{
     renderArticleList(e.target.value);
@@ -458,6 +488,13 @@ function renderArticleList(searchValue=""){
 
   document.getElementById("backToCounterBtn").addEventListener("click", renderCounter);
   document.getElementById("toSummaryBtn").addEventListener("click", renderSummary);
+
+  document.getElementById("resetBtnList").addEventListener("click", ()=>{
+    if(confirm("Name und alle Zähler wirklich zurücksetzen?")){
+      resetAllData();
+      renderStart();
+    }
+  });
 }
 
 function renderSummary(){
@@ -491,6 +528,8 @@ Datum: ${escapeHtml(dateStr)}</div>
         <button class="btn" id="backBtn" type="button">Zurück</button>
         <button class="btn btnPrimary" id="sendBtn" type="button">Mail senden</button>
       </div>
+
+      <button class="btn btnDanger" id="resetBtnSummary" type="button">Zurücksetzen</button>
     </div>
   `;
 
@@ -511,6 +550,13 @@ ${summaryText}
 
     const mailto = `mailto:${encodeURIComponent(MAIL_TO)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
     window.location.href = mailto;
+  });
+
+  document.getElementById("resetBtnSummary").addEventListener("click", ()=>{
+    if(confirm("Name und alle Zähler wirklich zurücksetzen?")){
+      resetAllData();
+      renderStart();
+    }
   });
 }
 
