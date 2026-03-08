@@ -19,8 +19,14 @@
     width:100%;border:1px solid #ccc;background:#fff;border-radius:14px;
     padding:13px 12px;font-size:16px;font-weight:800;margin-top:10px;
   }
+  .btnPrimary{
+    background:#111;color:#fff;border-color:#111;
+  }
+  .btnAccent{
+    background:#e9f2ff;border-color:#8bb6ff;color:#124191;
+  }
   .btnRow{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:14px}
-  .smallBtnRow{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px}
+  .tripleRow{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-top:12px}
   .counterWrap{text-align:center;padding:10px 0}
   .counterLabel{font-size:14px;color:#666;margin-bottom:8px}
   .bigNumber{font-size:64px;font-weight:900;line-height:1;margin:8px 0}
@@ -31,16 +37,24 @@
   .progress{font-size:14px;color:#666;margin-bottom:10px}
   .articleName{font-size:26px;font-weight:900;line-height:1.15}
   .articleLoc{font-size:14px;color:#666;margin-top:6px}
+
   .listItem{
-    padding:12px 0;border-bottom:1px solid #eee;display:grid;
-    grid-template-columns:1fr auto;gap:10px;align-items:center;
+    padding:12px 0;border-bottom:1px solid #eee;
+    display:grid;grid-template-columns:1fr auto;gap:10px;align-items:center;
   }
-  .pill{
-    font-size:13px;border:1px solid #ddd;border-radius:999px;padding:5px 10px;color:#444;white-space:nowrap;
+  .listRight{
+    display:flex;align-items:center;gap:8px;
   }
+  .miniBtn{
+    width:36px;height:36px;border-radius:10px;border:1px solid #ccc;background:#fff;
+    font-size:20px;font-weight:900;line-height:1;display:flex;align-items:center;justify-content:center;
+  }
+  .qtyBox{
+    min-width:42px;text-align:center;font-weight:900;font-size:18px;
+  }
+
   .footer{margin-top:28px;padding-top:14px;border-top:1px solid #eee;color:#666;font-size:13px;text-align:center}
   .summaryLine{padding:10px 0;border-bottom:1px solid #eee}
-  .hidden{display:none}
 </style>
 </head>
 <body>
@@ -52,7 +66,7 @@
 <script>
 const CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQkmfxeyM39IFCaumNzHV-WmWqSkZ7efxPrV_tRbKRe_ggInNgtoJEx5xozv-PzyEbfdHQ3EQ9kusdf/pub?output=csv";
 const MAIL_TO = "timo.b@me.com";
-const STORAGE_KEY = "lagerbestellung_v1";
+const STORAGE_KEY = "lagerbestellung_v2";
 
 let rows = [];
 let articles = [];
@@ -60,7 +74,6 @@ let currentIndex = 0;
 let orderAmounts = {};
 let userName = "";
 let lastUpdated = "–";
-let sheetLoaded = false;
 
 // ---------- helpers ----------
 function normalize(s){
@@ -90,6 +103,19 @@ function getMinStock(r){
 }
 function getIdForRow(r, idx){
   return (r.sku && r.sku.trim()) ? r.sku.trim() : `row_${idx}`;
+}
+function getAmount(id){
+  return Number(orderAmounts[id] || 0);
+}
+function setAmount(id, value){
+  orderAmounts[id] = Math.max(0, Number(value) || 0);
+  saveState();
+}
+function incAmount(id){
+  setAmount(id, getAmount(id) + 1);
+}
+function decAmount(id){
+  setAmount(id, Math.max(0, getAmount(id) - 1));
 }
 
 // ---------- CSV parser ----------
@@ -179,16 +205,51 @@ function loadState(){
     orderAmounts = data.orderAmounts || {};
   }catch(e){}
 }
-function clearState(){
-  localStorage.removeItem(STORAGE_KEY);
-}
 
 // ---------- data prep ----------
 function buildArticles(){
   articles = rows
     .map((r, idx) => ({...r, _idx: idx, _id: getIdForRow(r, idx)}))
-    .filter(r => getName(r)); // nur echte Artikel mit Name
+    .filter(r => getName(r));
   if(currentIndex >= articles.length) currentIndex = 0;
+}
+
+// ---------- common nav ----------
+function renderTopNav(showListButton=true){
+  return `
+    <div class="tripleRow">
+      <button class="btn btnAccent" id="prevTopBtn" type="button">Vorheriger Artikel</button>
+      ${showListButton ? `<button class="btn btnAccent" id="openListTopBtn" type="button">Bestellliste</button>` : `<button class="btn btnAccent" id="backToCounterTopBtn" type="button">Zurück zum Artikel</button>`}
+      <button class="btn btnPrimary" id="finishTopBtn" type="button">Bestellung abschließen</button>
+    </div>
+  `;
+}
+
+function bindCommonTopNav(showListButton=true){
+  const prev = document.getElementById("prevTopBtn");
+  const finish = document.getElementById("finishTopBtn");
+
+  if(prev){
+    prev.addEventListener("click", ()=>{
+      if(currentIndex > 0){
+        currentIndex--;
+        saveState();
+        renderCounter();
+      }
+    });
+  }
+
+  if(showListButton){
+    const listBtn = document.getElementById("openListTopBtn");
+    if(listBtn) listBtn.addEventListener("click", renderArticleList);
+  } else {
+    const backBtn = document.getElementById("backToCounterTopBtn");
+    if(backBtn) backBtn.addEventListener("click", renderCounter);
+  }
+
+  if(finish){
+    finish.addEventListener("click", renderSummary);
+  }
 }
 
 // ---------- views ----------
@@ -203,8 +264,8 @@ function renderStart(){
         Hallo, um die Lagerbestellung zu starten trage bitte hier deinen Namen ein:
       </div>
       <input id="nameInput" type="text" placeholder="Dein Name" value="${escapeHtml(userName)}">
-      <button class="btn" id="startBtn" type="button">Bestand zählen</button>
-      <button class="btn" id="openListBtn" type="button">Artikelliste öffnen</button>
+      <button class="btn btnPrimary" id="startBtn" type="button">Bestand zählen</button>
+      <button class="btn" id="openListBtn" type="button">Bestellliste öffnen</button>
     </div>
   `;
 
@@ -221,6 +282,10 @@ function renderStart(){
 
   document.getElementById("openListBtn").addEventListener("click", ()=>{
     const val = document.getElementById("nameInput").value.trim();
+    if(!val && !userName){
+      alert("Bitte Namen eintragen.");
+      return;
+    }
     userName = val || userName;
     saveState();
     renderArticleList();
@@ -237,12 +302,14 @@ function renderCounter(){
   }
 
   const a = articles[currentIndex];
-  const currentAmount = Number(orderAmounts[a._id] || 0);
+  const currentAmount = getAmount(a._id);
 
   const app = document.getElementById("app");
   app.innerHTML = `
     <h1>Lagerbestellung</h1>
     <div class="sub">Zuletzt aktualisiert: ${escapeHtml(lastUpdated)}</div>
+
+    ${renderTopNav(true)}
 
     <div class="progress">Artikel ${currentIndex + 1} von ${articles.length}</div>
 
@@ -252,7 +319,7 @@ function renderCounter(){
 
       <div class="counterWrap">
         <div class="counterLabel">Mindestbestand: ${escapeHtml(getMinStock(a))}</div>
-        <div class="bigNumber" id="amountDisplay">${currentAmount}</div>
+        <div class="bigNumber">${currentAmount}</div>
         <div class="counterLabel">Einheit: Stk.</div>
 
         <div class="arrowRow">
@@ -261,38 +328,33 @@ function renderCounter(){
         </div>
       </div>
 
-      <div class="smallBtnRow">
-        <button class="btn" id="listBtn" type="button">Artikelliste</button>
-        <button class="btn" id="overviewBtn" type="button">Bestellübersicht</button>
-      </div>
-
       <div class="btnRow">
         <button class="btn" id="prevBtn" type="button">Vorheriger Artikel</button>
         ${currentIndex === articles.length - 1
-          ? `<button class="btn" id="nextBtn" type="button">Jetzt bestellen</button>`
-          : `<button class="btn" id="nextBtn" type="button">Nächster Artikel</button>`}
+          ? `<button class="btn btnPrimary" id="nextBtn" type="button">Jetzt bestellen</button>`
+          : `<button class="btn btnAccent" id="nextBtn" type="button">Nächster Artikel</button>`}
       </div>
     </div>
   `;
 
+  bindCommonTopNav(true);
+
   document.getElementById("minusBtn").addEventListener("click", ()=>{
-    const now = Number(orderAmounts[a._id] || 0);
-    orderAmounts[a._id] = Math.max(0, now - 1);
-    saveState();
+    decAmount(a._id);
     renderCounter();
   });
 
   document.getElementById("plusBtn").addEventListener("click", ()=>{
-    const now = Number(orderAmounts[a._id] || 0);
-    orderAmounts[a._id] = now + 1;
-    saveState();
+    incAmount(a._id);
     renderCounter();
   });
 
   document.getElementById("prevBtn").addEventListener("click", ()=>{
-    if(currentIndex > 0) currentIndex--;
-    saveState();
-    renderCounter();
+    if(currentIndex > 0){
+      currentIndex--;
+      saveState();
+      renderCounter();
+    }
   });
 
   document.getElementById("nextBtn").addEventListener("click", ()=>{
@@ -301,82 +363,97 @@ function renderCounter(){
       saveState();
       renderCounter();
     } else {
-      saveState();
       renderSummary();
     }
   });
-
-  document.getElementById("listBtn").addEventListener("click", renderArticleList);
-  document.getElementById("overviewBtn").addEventListener("click", renderSummary);
 }
 
-function renderArticleList(){
+function listItemHtml(a, idx){
+  const amount = getAmount(a._id);
+  return `
+    <div class="listItem" data-idx="${idx}">
+      <div class="listMain" style="cursor:pointer">
+        <div style="font-weight:800">${escapeHtml(getName(a))}</div>
+        <div class="muted" style="font-size:13px">${escapeHtml(formatLocation(getLocRaw(a)))}</div>
+        <div class="muted" style="font-size:13px">Mindestbestand: ${escapeHtml(getMinStock(a))}</div>
+      </div>
+      <div class="listRight">
+        <button class="miniBtn minusMini" data-id="${escapeHtml(a._id)}" type="button">−</button>
+        <div class="qtyBox">${amount}</div>
+        <button class="miniBtn plusMini" data-id="${escapeHtml(a._id)}" type="button">+</button>
+      </div>
+    </div>
+  `;
+}
+
+function bindListControls(){
+  document.querySelectorAll(".listItem .listMain").forEach(el=>{
+    el.addEventListener("click", ()=>{
+      const parent = el.closest(".listItem");
+      currentIndex = Number(parent.dataset.idx || 0);
+      saveState();
+      renderCounter();
+    });
+  });
+
+  document.querySelectorAll(".minusMini").forEach(btn=>{
+    btn.addEventListener("click", (e)=>{
+      e.stopPropagation();
+      decAmount(btn.dataset.id);
+      renderArticleList(document.getElementById("listSearch")?.value || "");
+    });
+  });
+
+  document.querySelectorAll(".plusMini").forEach(btn=>{
+    btn.addEventListener("click", (e)=>{
+      e.stopPropagation();
+      incAmount(btn.dataset.id);
+      renderArticleList(document.getElementById("listSearch")?.value || "");
+    });
+  });
+}
+
+function renderArticleList(searchValue=""){
   const app = document.getElementById("app");
 
-  const itemsHtml = articles.map((a, idx) => {
-    const amount = Number(orderAmounts[a._id] || 0);
-    return `
-      <div class="listItem" data-idx="${idx}">
-        <div>
-          <div style="font-weight:800">${escapeHtml(getName(a))}</div>
-          <div class="muted" style="font-size:13px">${escapeHtml(formatLocation(getLocRaw(a)))}</div>
-        </div>
-        <div class="pill">${amount} Stk.</div>
-      </div>
-    `;
-  }).join("");
+  const toks = splitTokens(searchValue);
+  const filtered = articles.filter(a=>{
+    if(!toks.length) return true;
+    const aliasExpanded = (a.aliases || "").replace(/[,;]+/g," ");
+    const hay = normalize([getName(a), aliasExpanded, a.sku, a.ean].filter(Boolean).join(" "));
+    return toks.every(t => hay.includes(t));
+  });
+
+  const itemsHtml = filtered.length
+    ? filtered.map(a => {
+        const idx = articles.findIndex(x => x._id === a._id);
+        return listItemHtml(a, idx);
+      }).join("")
+    : `<div class="muted">Kein Treffer.</div>`;
 
   app.innerHTML = `
     <h1>Lagerbestellung</h1>
     <div class="sub">Zuletzt aktualisiert: ${escapeHtml(lastUpdated)}</div>
 
+    ${renderTopNav(false)}
+
     <div class="card">
-      <h2>Artikelliste</h2>
-      <input id="listSearch" type="text" placeholder="Artikel suchen">
+      <h2>Bestellliste</h2>
+      <input id="listSearch" type="text" placeholder="Artikel suchen" value="${escapeHtml(searchValue)}">
       <div id="listWrap">${itemsHtml}</div>
 
       <div class="btnRow">
-        <button class="btn" id="backToCounterBtn" type="button">Zurück</button>
-        <button class="btn" id="toSummaryBtn" type="button">Bestellübersicht</button>
+        <button class="btn" id="backToCounterBtn" type="button">Zum aktuellen Artikel</button>
+        <button class="btn btnPrimary" id="toSummaryBtn" type="button">Bestellung abschließen</button>
       </div>
     </div>
   `;
 
-  function bindListClicks(){
-    document.querySelectorAll(".listItem").forEach(el=>{
-      el.addEventListener("click", ()=>{
-        currentIndex = Number(el.dataset.idx || 0);
-        saveState();
-        renderCounter();
-      });
-    });
-  }
-  bindListClicks();
+  bindCommonTopNav(false);
+  bindListControls();
 
   document.getElementById("listSearch").addEventListener("input", (e)=>{
-    const toks = splitTokens(e.target.value);
-    const filtered = articles.filter(a=>{
-      if(!toks.length) return true;
-      const aliasExpanded = (a.aliases || "").replace(/[,;]+/g," ");
-      const hay = normalize([getName(a), aliasExpanded, a.sku, a.ean].filter(Boolean).join(" "));
-      return toks.every(t => hay.includes(t));
-    });
-
-    document.getElementById("listWrap").innerHTML = filtered.map(a=>{
-      const idx = articles.findIndex(x => x._id === a._id);
-      const amount = Number(orderAmounts[a._id] || 0);
-      return `
-        <div class="listItem" data-idx="${idx}">
-          <div>
-            <div style="font-weight:800">${escapeHtml(getName(a))}</div>
-            <div class="muted" style="font-size:13px">${escapeHtml(formatLocation(getLocRaw(a)))}</div>
-          </div>
-          <div class="pill">${amount} Stk.</div>
-        </div>
-      `;
-    }).join("") || `<div class="muted">Kein Treffer.</div>`;
-
-    bindListClicks();
+    renderArticleList(e.target.value);
   });
 
   document.getElementById("backToCounterBtn").addEventListener("click", renderCounter);
@@ -385,11 +462,10 @@ function renderArticleList(){
 
 function renderSummary(){
   const selected = articles
-    .map(a => ({name: getName(a), amount: Number(orderAmounts[a._id] || 0)}))
+    .map(a => ({name: getName(a), amount: getAmount(a._id)}))
     .filter(x => x.amount > 0);
 
   const dateStr = todayString();
-
   const summaryText = selected.length
     ? selected.map(x => `${x.name} – ${x.amount} Stk.`).join("\n")
     : "Keine Artikel ausgewählt.";
@@ -413,12 +489,12 @@ Datum: ${escapeHtml(dateStr)}</div>
 
       <div class="btnRow">
         <button class="btn" id="backBtn" type="button">Zurück</button>
-        <button class="btn" id="sendBtn" type="button">Mail senden</button>
+        <button class="btn btnPrimary" id="sendBtn" type="button">Mail senden</button>
       </div>
     </div>
   `;
 
-  document.getElementById("backBtn").addEventListener("click", renderCounter);
+  document.getElementById("backBtn").addEventListener("click", renderArticleList);
 
   document.getElementById("sendBtn").addEventListener("click", ()=>{
     const subject = `Lagerbestellung – ${userName || "Ohne Name"} – ${dateStr.split(" ")[0]}`;
@@ -451,14 +527,8 @@ async function init(){
     rows = parseCSV(txt);
     lastUpdated = todayString();
     buildArticles();
-    sheetLoaded = true;
-
-    if(userName && articles.length){
-      renderStart();
-    } else {
-      renderStart();
-    }
-  }catch(e){
+    renderStart();
+  } catch(e){
     app.innerHTML = `<h1>Lagerbestellung</h1><div class="card">Fehler beim Laden der Artikeldaten.</div>`;
   }
 }
