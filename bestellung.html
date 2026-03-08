@@ -1,0 +1,470 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lagerbestellung</title>
+<style>
+  body{font-family:system-ui;max-width:900px;margin:0 auto;padding:16px}
+  h1{font-size:28px;margin:10px 0 6px;line-height:1.15}
+  h2{font-size:22px;margin:10px 0}
+  .sub{color:#666;font-size:14px;margin:0 0 12px}
+  .muted{color:#666}
+  .card{border:1px solid #eee;border-radius:16px;padding:16px;margin:12px 0}
+  input[type="text"]{
+    width:100%;font-size:18px;padding:14px;border-radius:14px;border:1px solid #ccc;
+    margin:10px 0 12px;box-sizing:border-box;
+  }
+  .btn{
+    width:100%;border:1px solid #ccc;background:#fff;border-radius:14px;
+    padding:13px 12px;font-size:16px;font-weight:800;margin-top:10px;
+  }
+  .btnRow{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:14px}
+  .smallBtnRow{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px}
+  .counterWrap{text-align:center;padding:10px 0}
+  .counterLabel{font-size:14px;color:#666;margin-bottom:8px}
+  .bigNumber{font-size:64px;font-weight:900;line-height:1;margin:8px 0}
+  .arrowRow{display:grid;grid-template-columns:1fr 1fr;gap:12px;max-width:340px;margin:0 auto}
+  .arrowBtn{
+    font-size:28px;font-weight:900;padding:14px;border-radius:16px;border:1px solid #ccc;background:#fff;
+  }
+  .progress{font-size:14px;color:#666;margin-bottom:10px}
+  .articleName{font-size:26px;font-weight:900;line-height:1.15}
+  .articleLoc{font-size:14px;color:#666;margin-top:6px}
+  .listItem{
+    padding:12px 0;border-bottom:1px solid #eee;display:grid;
+    grid-template-columns:1fr auto;gap:10px;align-items:center;
+  }
+  .pill{
+    font-size:13px;border:1px solid #ddd;border-radius:999px;padding:5px 10px;color:#444;white-space:nowrap;
+  }
+  .footer{margin-top:28px;padding-top:14px;border-top:1px solid #eee;color:#666;font-size:13px;text-align:center}
+  .summaryLine{padding:10px 0;border-bottom:1px solid #eee}
+  .hidden{display:none}
+</style>
+</head>
+<body>
+
+<div id="app"></div>
+
+<div class="footer">Erstellt vom Medien- &amp; Kreativteam</div>
+
+<script>
+const CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQkmfxeyM39IFCaumNzHV-WmWqSkZ7efxPrV_tRbKRe_ggInNgtoJEx5xozv-PzyEbfdHQ3EQ9kusdf/pub?output=csv";
+const MAIL_TO = "timo.b@me.com";
+const STORAGE_KEY = "lagerbestellung_v1";
+
+let rows = [];
+let articles = [];
+let currentIndex = 0;
+let orderAmounts = {};
+let userName = "";
+let lastUpdated = "–";
+let sheetLoaded = false;
+
+// ---------- helpers ----------
+function normalize(s){
+  return (s||"").toString().toLowerCase().trim()
+    .replace(/[ä]/g,"ae").replace(/[ö]/g,"oe").replace(/[ü]/g,"ue").replace(/[ß]/g,"ss");
+}
+function splitTokens(q){
+  return normalize(q).replace(/[^a-z0-9]+/g," ").split(/\s+/).filter(Boolean);
+}
+function todayString(){
+  const d = new Date();
+  return d.toLocaleDateString("de-DE", { year:"numeric", month:"2-digit", day:"2-digit" }) + " " +
+         d.toLocaleTimeString("de-DE", { hour:"2-digit", minute:"2-digit" });
+}
+function escapeHtml(str){
+  return (str||"").toString()
+    .replaceAll("&","&amp;")
+    .replaceAll("<","&lt;")
+    .replaceAll(">","&gt;")
+    .replaceAll('"',"&quot;");
+}
+function getName(r){ return (r.name || r.Bezeichnung || "").trim(); }
+function getLocRaw(r){ return (r.location || r.Ablageplatz || r.ablageplatz || "").trim(); }
+function getMinStock(r){
+  const v = (r.mindestbestand || "").trim();
+  return v ? v : "–";
+}
+function getIdForRow(r, idx){
+  return (r.sku && r.sku.trim()) ? r.sku.trim() : `row_${idx}`;
+}
+
+// ---------- CSV parser ----------
+function parseCSV(text){
+  const out = [];
+  let i=0, field="", row=[], inQuotes=false;
+
+  while(i < text.length){
+    const c = text[i];
+    if(inQuotes){
+      if(c === '"' && text[i+1] === '"'){ field += '"'; i += 2; continue; }
+      if(c === '"'){ inQuotes=false; i++; continue; }
+      field += c; i++; continue;
+    } else {
+      if(c === '"'){ inQuotes=true; i++; continue; }
+      if(c === ','){ row.push(field); field=""; i++; continue; }
+      if(c === '\n' || c === '\r'){
+        if(c === '\r' && text[i+1] === '\n') i++;
+        row.push(field); field="";
+        if(row.some(v => (v||"").trim() !== "")) out.push(row);
+        row=[]; i++; continue;
+      }
+      field += c; i++; continue;
+    }
+  }
+
+  row.push(field);
+  if(row.some(v => (v||"").trim() !== "")) out.push(row);
+
+  const headers = (out.shift()||[]).map(h => (h||"").trim());
+  return out.map(cols => {
+    const obj = {};
+    headers.forEach((h, idx) => obj[h] = (cols[idx]||"").trim());
+    return obj;
+  });
+}
+
+// ---------- location formatting ----------
+function formatLocation(locRaw){
+  if(!locRaw) return "";
+  let loc = locRaw.toString().trim();
+
+  const simple = loc.replace(/\s+/g," ").trim();
+  const simpleNorm = normalize(simple);
+
+  if(["kueche","kuche","wand","offen"].includes(simpleNorm)){
+    const pretty = (simpleNorm === "kueche" || simpleNorm === "kuche") ? "Küche" : simple;
+    return `Liegt in ${pretty}`;
+  }
+
+  let mDoor = simple.match(/^([SRL])\s*\.?\s*(\d+)\s+t(ü|ue)re\s+([rl])$/i);
+  if(mDoor){
+    const schrank = mDoor[2];
+    const side = mDoor[4].toLowerCase() === "r" ? "rechts" : "links";
+    return `Liegt an Schrank ${schrank}, Türe ${side}`;
+  }
+
+  let code = loc.replace(/\s+/g,"").replace(/\.$/,"");
+  const m = code.match(/^([SRL])\.?(\d+(?:\.\d+){0,3})$/i);
+  if(!m) return `Liegt bei: ${locRaw}`;
+
+  const parts = m[2].split(".");
+  const [schrank, regal, fach, unterfach] = parts;
+
+  let txt = `Liegt in Schrank ${schrank}`;
+  if(regal) txt += `, Regal ${regal}`;
+  if(fach) txt += `, Fach ${fach}`;
+  if(unterfach) txt += `, Unterfach ${unterfach}`;
+  return txt;
+}
+
+// ---------- storage ----------
+function saveState(){
+  localStorage.setItem(STORAGE_KEY, JSON.stringify({
+    userName,
+    currentIndex,
+    orderAmounts
+  }));
+}
+function loadState(){
+  try{
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if(!raw) return;
+    const data = JSON.parse(raw);
+    userName = data.userName || "";
+    currentIndex = Number.isFinite(data.currentIndex) ? data.currentIndex : 0;
+    orderAmounts = data.orderAmounts || {};
+  }catch(e){}
+}
+function clearState(){
+  localStorage.removeItem(STORAGE_KEY);
+}
+
+// ---------- data prep ----------
+function buildArticles(){
+  articles = rows
+    .map((r, idx) => ({...r, _idx: idx, _id: getIdForRow(r, idx)}))
+    .filter(r => getName(r)); // nur echte Artikel mit Name
+  if(currentIndex >= articles.length) currentIndex = 0;
+}
+
+// ---------- views ----------
+function renderStart(){
+  const app = document.getElementById("app");
+  app.innerHTML = `
+    <h1>Lagerbestellung</h1>
+    <div class="sub">Zuletzt aktualisiert: ${escapeHtml(lastUpdated)}</div>
+
+    <div class="card">
+      <div style="font-size:18px;font-weight:700;margin-bottom:8px;">
+        Hallo, um die Lagerbestellung zu starten trage bitte hier deinen Namen ein:
+      </div>
+      <input id="nameInput" type="text" placeholder="Dein Name" value="${escapeHtml(userName)}">
+      <button class="btn" id="startBtn" type="button">Bestand zählen</button>
+      <button class="btn" id="openListBtn" type="button">Artikelliste öffnen</button>
+    </div>
+  `;
+
+  document.getElementById("startBtn").addEventListener("click", ()=>{
+    const val = document.getElementById("nameInput").value.trim();
+    if(!val){
+      alert("Bitte Namen eintragen.");
+      return;
+    }
+    userName = val;
+    saveState();
+    renderCounter();
+  });
+
+  document.getElementById("openListBtn").addEventListener("click", ()=>{
+    const val = document.getElementById("nameInput").value.trim();
+    userName = val || userName;
+    saveState();
+    renderArticleList();
+  });
+}
+
+function renderCounter(){
+  if(!articles.length){
+    document.getElementById("app").innerHTML = `
+      <h1>Lagerbestellung</h1>
+      <div class="card">Keine Artikel gefunden.</div>
+    `;
+    return;
+  }
+
+  const a = articles[currentIndex];
+  const currentAmount = Number(orderAmounts[a._id] || 0);
+
+  const app = document.getElementById("app");
+  app.innerHTML = `
+    <h1>Lagerbestellung</h1>
+    <div class="sub">Zuletzt aktualisiert: ${escapeHtml(lastUpdated)}</div>
+
+    <div class="progress">Artikel ${currentIndex + 1} von ${articles.length}</div>
+
+    <div class="card">
+      <div class="articleName">${escapeHtml(getName(a))}</div>
+      <div class="articleLoc">${escapeHtml(formatLocation(getLocRaw(a)))}</div>
+
+      <div class="counterWrap">
+        <div class="counterLabel">Mindestbestand: ${escapeHtml(getMinStock(a))}</div>
+        <div class="bigNumber" id="amountDisplay">${currentAmount}</div>
+        <div class="counterLabel">Einheit: Stk.</div>
+
+        <div class="arrowRow">
+          <button class="arrowBtn" id="minusBtn" type="button">←</button>
+          <button class="arrowBtn" id="plusBtn" type="button">→</button>
+        </div>
+      </div>
+
+      <div class="smallBtnRow">
+        <button class="btn" id="listBtn" type="button">Artikelliste</button>
+        <button class="btn" id="overviewBtn" type="button">Bestellübersicht</button>
+      </div>
+
+      <div class="btnRow">
+        <button class="btn" id="prevBtn" type="button">Vorheriger Artikel</button>
+        ${currentIndex === articles.length - 1
+          ? `<button class="btn" id="nextBtn" type="button">Jetzt bestellen</button>`
+          : `<button class="btn" id="nextBtn" type="button">Nächster Artikel</button>`}
+      </div>
+    </div>
+  `;
+
+  document.getElementById("minusBtn").addEventListener("click", ()=>{
+    const now = Number(orderAmounts[a._id] || 0);
+    orderAmounts[a._id] = Math.max(0, now - 1);
+    saveState();
+    renderCounter();
+  });
+
+  document.getElementById("plusBtn").addEventListener("click", ()=>{
+    const now = Number(orderAmounts[a._id] || 0);
+    orderAmounts[a._id] = now + 1;
+    saveState();
+    renderCounter();
+  });
+
+  document.getElementById("prevBtn").addEventListener("click", ()=>{
+    if(currentIndex > 0) currentIndex--;
+    saveState();
+    renderCounter();
+  });
+
+  document.getElementById("nextBtn").addEventListener("click", ()=>{
+    if(currentIndex < articles.length - 1){
+      currentIndex++;
+      saveState();
+      renderCounter();
+    } else {
+      saveState();
+      renderSummary();
+    }
+  });
+
+  document.getElementById("listBtn").addEventListener("click", renderArticleList);
+  document.getElementById("overviewBtn").addEventListener("click", renderSummary);
+}
+
+function renderArticleList(){
+  const app = document.getElementById("app");
+
+  const itemsHtml = articles.map((a, idx) => {
+    const amount = Number(orderAmounts[a._id] || 0);
+    return `
+      <div class="listItem" data-idx="${idx}">
+        <div>
+          <div style="font-weight:800">${escapeHtml(getName(a))}</div>
+          <div class="muted" style="font-size:13px">${escapeHtml(formatLocation(getLocRaw(a)))}</div>
+        </div>
+        <div class="pill">${amount} Stk.</div>
+      </div>
+    `;
+  }).join("");
+
+  app.innerHTML = `
+    <h1>Lagerbestellung</h1>
+    <div class="sub">Zuletzt aktualisiert: ${escapeHtml(lastUpdated)}</div>
+
+    <div class="card">
+      <h2>Artikelliste</h2>
+      <input id="listSearch" type="text" placeholder="Artikel suchen">
+      <div id="listWrap">${itemsHtml}</div>
+
+      <div class="btnRow">
+        <button class="btn" id="backToCounterBtn" type="button">Zurück</button>
+        <button class="btn" id="toSummaryBtn" type="button">Bestellübersicht</button>
+      </div>
+    </div>
+  `;
+
+  function bindListClicks(){
+    document.querySelectorAll(".listItem").forEach(el=>{
+      el.addEventListener("click", ()=>{
+        currentIndex = Number(el.dataset.idx || 0);
+        saveState();
+        renderCounter();
+      });
+    });
+  }
+  bindListClicks();
+
+  document.getElementById("listSearch").addEventListener("input", (e)=>{
+    const toks = splitTokens(e.target.value);
+    const filtered = articles.filter(a=>{
+      if(!toks.length) return true;
+      const aliasExpanded = (a.aliases || "").replace(/[,;]+/g," ");
+      const hay = normalize([getName(a), aliasExpanded, a.sku, a.ean].filter(Boolean).join(" "));
+      return toks.every(t => hay.includes(t));
+    });
+
+    document.getElementById("listWrap").innerHTML = filtered.map(a=>{
+      const idx = articles.findIndex(x => x._id === a._id);
+      const amount = Number(orderAmounts[a._id] || 0);
+      return `
+        <div class="listItem" data-idx="${idx}">
+          <div>
+            <div style="font-weight:800">${escapeHtml(getName(a))}</div>
+            <div class="muted" style="font-size:13px">${escapeHtml(formatLocation(getLocRaw(a)))}</div>
+          </div>
+          <div class="pill">${amount} Stk.</div>
+        </div>
+      `;
+    }).join("") || `<div class="muted">Kein Treffer.</div>`;
+
+    bindListClicks();
+  });
+
+  document.getElementById("backToCounterBtn").addEventListener("click", renderCounter);
+  document.getElementById("toSummaryBtn").addEventListener("click", renderSummary);
+}
+
+function renderSummary(){
+  const selected = articles
+    .map(a => ({name: getName(a), amount: Number(orderAmounts[a._id] || 0)}))
+    .filter(x => x.amount > 0);
+
+  const dateStr = todayString();
+
+  const summaryText = selected.length
+    ? selected.map(x => `${x.name} – ${x.amount} Stk.`).join("\n")
+    : "Keine Artikel ausgewählt.";
+
+  const linesHtml = selected.length
+    ? selected.map(x => `<div class="summaryLine"><b>${escapeHtml(x.name)}</b><br>${x.amount} Stk.</div>`).join("")
+    : `<div class="muted">Keine Artikel ausgewählt.</div>`;
+
+  const app = document.getElementById("app");
+  app.innerHTML = `
+    <h1>Lagerbestellung</h1>
+    <div class="sub">Zuletzt aktualisiert: ${escapeHtml(lastUpdated)}</div>
+
+    <div class="card">
+      <h2>Bestellübersicht</h2>
+      <div class="muted" style="white-space:pre-line;margin-bottom:14px;">Name: ${escapeHtml(userName || "–")}
+Datum: ${escapeHtml(dateStr)}</div>
+
+      <div style="font-weight:800;margin-bottom:8px;">Zu bestellen:</div>
+      ${linesHtml}
+
+      <div class="btnRow">
+        <button class="btn" id="backBtn" type="button">Zurück</button>
+        <button class="btn" id="sendBtn" type="button">Mail senden</button>
+      </div>
+    </div>
+  `;
+
+  document.getElementById("backBtn").addEventListener("click", renderCounter);
+
+  document.getElementById("sendBtn").addEventListener("click", ()=>{
+    const subject = `Lagerbestellung – ${userName || "Ohne Name"} – ${dateStr.split(" ")[0]}`;
+    const body =
+`Hallo,
+
+hier die Lagerbestellung.
+
+Name: ${userName || "–"}
+Datum: ${dateStr}
+
+${summaryText}
+`;
+
+    const mailto = `mailto:${encodeURIComponent(MAIL_TO)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+    window.location.href = mailto;
+  });
+}
+
+// ---------- init ----------
+async function init(){
+  loadState();
+
+  const app = document.getElementById("app");
+  app.innerHTML = `<h1>Lagerbestellung</h1><div class="card">Lade Artikeldaten…</div>`;
+
+  try{
+    const res = await fetch(CSV_URL, { cache: "no-store" });
+    const txt = await res.text();
+    rows = parseCSV(txt);
+    lastUpdated = todayString();
+    buildArticles();
+    sheetLoaded = true;
+
+    if(userName && articles.length){
+      renderStart();
+    } else {
+      renderStart();
+    }
+  }catch(e){
+    app.innerHTML = `<h1>Lagerbestellung</h1><div class="card">Fehler beim Laden der Artikeldaten.</div>`;
+  }
+}
+
+init();
+</script>
+
+</body>
+</html>
